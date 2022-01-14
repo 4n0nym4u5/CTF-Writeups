@@ -29,7 +29,7 @@
 
 These are the challenge files provided:
 
-```json
+```css
 CArot
 ├── carot
 ├── carot.c
