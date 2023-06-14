@@ -5,7 +5,7 @@
 > Author: NoobHacker
 
 `nc challs.n00bzunit3d.xyz 38894`
-Challenge file: [srop_me](https://github.com/4n0nym4u5/CTF-Writeups/raw/main/n00bzCTF/ASM/srop_me)
+Challenge file: [srop_me](https://github.com/4n0nym4u5/CTF-Writeups/blob/main/n00bzCTF/ASM/srop_me)
 Points: 489
 Solves: 52
 
